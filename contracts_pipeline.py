@@ -289,12 +289,8 @@ def poll():
     insert_contracts(df)
     print("Inserted new contracts")
 
-# ---------- LOOP ----------
 if __name__ == "__main__":
-    while True:
-        try:
-            poll()
-        except Exception as e:
-            print("Error:", e)
-
-        time.sleep(300)
+    try:
+        poll()
+    except Exception as e:
+        print("Error:", e)
