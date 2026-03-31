@@ -3,6 +3,9 @@ import pandas as pd
 import time
 from datetime import datetime, UTC
 import psycopg2
+import os
+
+conn = psycopg2.connect(os.getenv("DB_URL"))
 
 # ---------- DB ----------
 def get_db_connection():
