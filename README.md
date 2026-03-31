@@ -25,3 +25,4 @@ This system polls USAspending for ICE/DHS detention-related contracts, filters f
 - Upserts are idempotent
 - Duplicate award IDs are ignored
 - Filtering is tuned for ICE detention-related signal
+cron test
