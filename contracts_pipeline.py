@@ -236,7 +236,7 @@ def insert_contracts(df):
 
 # ---------- MAIN ----------
 def poll():
-    print(f"\nPolling at {datetime.now(UTC)}")
+    print(f"\nPolling at {datetime.now(timezone.utc)}")
 
     all_data = []
     for page in range(1, 5):
