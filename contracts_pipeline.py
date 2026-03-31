@@ -1,7 +1,7 @@
 import requests
 import pandas as pd
 import time
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 import psycopg2
 import os
 
