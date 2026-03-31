@@ -7,11 +7,7 @@ import psycopg2
 # ---------- DB ----------
 def get_db_connection():
     return psycopg2.connect(
-        dbname="contracts_db",
-        user="liamben-zvi",
-        password="",
-        host="localhost",
-        port="5432"
+        "postgresql://postgres.cqfexbuwjzknngxqidou:CaliMansion67!!@aws-1-us-east-2.pooler.supabase.com:5432/postgres?sslmode=require"
     )
 
 # ---------- CONFIG ----------
@@ -85,8 +81,28 @@ def fetch_page(page):
         "order": "desc"
     }
 
-    res = requests.post(BASE_URL, json=payload, headers=HEADERS)
-    return res.json().get("results", [])
+    for attempt in range(5):
+        try:
+            res = requests.post(
+                BASE_URL,
+                json=payload,
+                headers=HEADERS,
+                timeout=30
+            )
+
+            if res.status_code == 200:
+                return res.json().get("results", [])
+
+            print(f"Bad status code: {res.status_code}")
+
+        except requests.exceptions.RequestException as e:
+            print(f"Request failed (attempt {attempt+1}): {e}")
+            time.sleep(2 ** attempt)
+
+    print("Failed to fetch page:", page)
+    return []
+    
+
 
 # ---------- FILTER ----------
 def is_relevant(row):
@@ -106,7 +122,7 @@ def is_relevant(row):
     if any(k in desc for k in NEGATIVE):
         return False
 
-    #  remove military false positives
+    # remove military false positives
     if any(x in desc for x in [
         "navmc", "ordinance", "weapon",
         "ammunition", "army", "air force"
@@ -159,7 +175,7 @@ def relevance_score(row):
     # MEDIUM SIGNAL
     score += sum(k in desc for k in TIER2) * 2
 
-    # BONUS: strong phrases
+    #  BONUS: strong phrases
     if "detention" in desc:
         score += 3
     if "detainee" in desc:
@@ -171,7 +187,7 @@ def relevance_score(row):
     if "detainee" in desc and "service" in desc:
         score += 3
 
-    # STRONGER penalty (updated)
+    #  STRONGER penalty (updated)
     if any(x in desc for x in [
         "review", "assessment", "consulting",
         "analysis", "inspection", "audit"
@@ -254,7 +270,7 @@ def poll():
 
     # scoring
 
-    # DEBUG
+    # 🔍 DEBUG
     print("\nSCORE DISTRIBUTION:")
     print(df["relevance_score"].describe())
 
