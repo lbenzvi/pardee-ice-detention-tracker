@@ -5,13 +5,22 @@ from datetime import datetime, timezone
 import psycopg2
 import os
 
-conn = psycopg2.connect(os.getenv("DB_URL"))
-
 # ---------- DB ----------
 def get_db_connection():
-    return psycopg2.connect(
-        "postgresql://postgres.cqfexbuwjzknngxqidou:CaliMansion67!!@aws-1-us-east-2.pooler.supabase.com:5432/postgres?sslmode=require"
-    )
+    return psycopg2.connect(os.getenv("DB_URL"))
+
+def get_latest_date():
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    cur.execute("SELECT MAX(date) FROM contracts;")
+    result = cur.fetchone()[0]
+
+    cur.close()
+    conn.close()
+
+    return result
+
 
 # ---------- CONFIG ----------
 BASE_URL = "https://api.usaspending.gov/api/v2/search/spending_by_award/"
@@ -20,6 +29,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0",
     "Content-Type": "application/json"
 }
+
 
 # ---------- KEYWORDS ----------
 TIER1 = [
@@ -51,6 +61,7 @@ NEGATIVE = [
     "license", "software", "subscription",
     "warranty"
 ]
+
 
 # ---------- FETCH ----------
 def fetch_page(page):
@@ -104,35 +115,21 @@ def fetch_page(page):
 
     print("Failed to fetch page:", page)
     return []
-    
 
 
 # ---------- FILTER ----------
 def is_relevant(row):
     desc = (row.get("description") or "").lower()
-    agency = (row.get("awarding_agency") or "").lower()
 
-    # enforce correct agencies
-    # if not any(x in agency for x in [
-    #     "immigration",
-    #     "customs",
-    #     "enforcement",
-    #     "homeland security"
-    # ]):
-    #     return False
-
-    # hard negatives
     if any(k in desc for k in NEGATIVE):
         return False
 
-    # remove military false positives
     if any(x in desc for x in [
         "navmc", "ordinance", "weapon",
         "ammunition", "army", "air force"
     ]):
         return False
 
-    # admin/IT junk
     if any(x in desc for x in [
         "license", "software", "subscription",
         "printer", "copier", "equipment",
@@ -140,11 +137,9 @@ def is_relevant(row):
     ]):
         return False
 
-    # strong signal
     if any(k in desc for k in TIER1):
         return True
 
-    # medium signal
     tier2_match = any(k in desc for k in TIER2)
 
     context_words = [
@@ -154,16 +149,13 @@ def is_relevant(row):
 
     context_match = any(k in desc for k in context_words)
 
-    if tier2_match and context_match:
-        return True
+    return tier2_match and context_match
 
-    return False
 
 # ---------- SCORE ----------
 def relevance_score(row):
     desc = (row.get("description") or "").lower()
 
-    # HARD REJECT (new)
     if any(x in desc for x in [
         "review", "assessment", "consulting",
         "analysis", "inspection", "audit"
@@ -172,13 +164,9 @@ def relevance_score(row):
 
     score = 0
 
-    # HIGH SIGNAL
     score += sum(k in desc for k in TIER1) * 3
-
-    # MEDIUM SIGNAL
     score += sum(k in desc for k in TIER2) * 2
 
-    #  BONUS: strong phrases
     if "detention" in desc:
         score += 3
     if "detainee" in desc:
@@ -190,14 +178,14 @@ def relevance_score(row):
     if "detainee" in desc and "service" in desc:
         score += 3
 
-    #  STRONGER penalty (updated)
     if any(x in desc for x in [
         "review", "assessment", "consulting",
         "analysis", "inspection", "audit"
     ]):
         score -= 6
 
-    return score
+    return int(score)
+
 
 # ---------- DB INSERT ----------
 def insert_contracts(df):
@@ -234,17 +222,50 @@ def insert_contracts(df):
     cur.close()
     conn.close()
 
+
 # ---------- MAIN ----------
 def poll():
     print(f"\nPolling at {datetime.now(timezone.utc)}")
 
+    latest_date = get_latest_date()
+    print("Latest date in DB:", latest_date)
+
     all_data = []
-    for page in range(1, 5):
+
+    for page in range(1, 25):
         results = fetch_page(page)
         if not results:
             break
-        all_data.extend(results)
+
+        new_batch = []
+
+        for r in results:
+            contract_date = r.get("Start Date")
+
+            if not contract_date:
+                continue
+
+            # 🔥 THIS IS WHERE YOUR CODE GOES
+            contract_dt = datetime.fromisoformat(contract_date).date()
+
+            latest_dt = latest_date  # already a date from DB
+
+            if latest_dt and contract_dt <= latest_dt:
+                print("Hit existing data → stopping early")
+                break
+
+            new_batch.append(r)
+
+        # 🚨 IMPORTANT: stop outer loop too
+        if not new_batch:
+            break
+
+        all_data.extend(new_batch)
         time.sleep(1)
+
+    if not all_data:
+        print("No new data")
+        return
 
     df = pd.DataFrame([{
         "award_id": r.get("Award ID"),
@@ -256,30 +277,30 @@ def poll():
         "awarding_agency": r.get("Awarding Agency Name")
     } for r in all_data])
 
-    print("Fetched:", len(df))
+    print("Fetched NEW:", len(df))
 
     if df.empty:
         return
 
-    # apply filter
+    # filtering
     df = df[df.apply(is_relevant, axis=1)]
-    df["relevance_score"] = df.apply(relevance_score, axis=1)
+
+    if df.empty:
+        print(f"New contracts fetched: {len(all_data)}")
+        print(f"Relevant after filtering: {len(df)}")
+        print("No inserts this run")
+        return
+
+    df.loc[:, "relevance_score"] = df.apply(
+        lambda row: relevance_score(row), axis=1
+    )
+
     df = df[df["relevance_score"] >= 10]
 
-    print("Relevant:", len(df))
+    print("Relevant NEW:", len(df))
 
     if df.empty:
         return
-
-    # scoring
-
-    # 🔍 DEBUG
-    print("\nSCORE DISTRIBUTION:")
-    print(df["relevance_score"].describe())
-
-    print("\nLOW SIGNAL EXAMPLES:")
-    print(df[df["relevance_score"] < 6][["relevance_score", "description"]].head(10))
-    # remove weak signals
 
     df = df.sort_values("relevance_score", ascending=False)
 
@@ -288,6 +309,7 @@ def poll():
 
     insert_contracts(df)
     print("Inserted new contracts")
+
 
 if __name__ == "__main__":
     try:
